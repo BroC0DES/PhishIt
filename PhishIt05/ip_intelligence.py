@@ -4,7 +4,7 @@ import ipinfo
 # Set this in your shell before running, e.g.:
 #   export IPINFO_TOKEN=your_token_here
 # Never hardcode the token in this file if it's going into a shared/git repo.
-ACCESS_TOKEN = os.getenv("1137b23642ef45")
+ACCESS_TOKEN = os.getenv("IPINFO_TOKEN")
 if not ACCESS_TOKEN:
     raise RuntimeError("Set IPINFO_TOKEN as an environment variable before running.")
 

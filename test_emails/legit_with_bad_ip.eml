@@ -1,0 +1,23 @@
+From: "Slack" <notifications@slack.com>
+Reply-To: notifications@slack.com
+Return-Path: bounce@slack.com
+Message-ID: <def789@slack.com>
+Subject: New message from your team in #general
+Date: Thu, 12 Sep 2024 09:15:00 +0000
+Authentication-Results: mx.google.com;
+    spf=pass smtp.mailfrom=slack.com;
+    dkim=pass header.d=slack.com;
+    dmarc=pass action=none header.from=slack.com
+Received: from slack.com (185.220.101.45)
+        by mx.google.com; Thu, 12 Sep 2024 09:15:05 +0000
+Content-Type: text/plain; charset="utf-8"
+
+Hi there,
+
+You have a new message waiting for you in #general.
+
+View it here:
+https://app.slack.com/client/T00000/C00000
+
+Thanks,
+The Slack Team

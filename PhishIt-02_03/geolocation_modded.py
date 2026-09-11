@@ -14,6 +14,15 @@ SPAMHAUS_CODES = {
     "127.0.0.11": "PBL-SPAMHAUS",
 }
 
+# Spamhaus ZEN also returns a small set of "error" codes that are NOT
+# blocklist hits — they mean the query itself couldn't be answered (most
+# commonly: it came through a public/shared DNS resolver, or got
+# rate-limited), not that the IP is listed. Treating these as a listing
+# produces false positives on ANY IP queried from an affected network,
+# including known-clean ones — so they're filtered out before deciding
+# whether an IP is "Spamhaus listed".
+SPAMHAUS_ERROR_CODES = {"127.255.255.252", "127.255.255.254", "127.255.255.255"}
+
 
 def _check_abuseipdb(ip):
     """Query AbuseIPDB for abuse score, TOR flag, and usage type.
@@ -42,13 +51,24 @@ def _check_abuseipdb(ip):
 
 
 def _check_spamhaus(ip):
-    """DNS-based Spamhaus ZEN lookup. Returns list of matched code labels."""
+    """DNS-based Spamhaus ZEN lookup. Returns list of matched code labels.
+    Spamhaus's own query-error codes (see SPAMHAUS_ERROR_CODES) are filtered
+    out here so they're never mistaken for a real blocklist listing."""
     try:
         reversed_ip = ".".join(reversed(ip.split(".")))
         query = f"{reversed_ip}.zen.spamhaus.org"
         answers = dns.resolver.resolve(query, "A")
-        codes = [SPAMHAUS_CODES.get(str(r), str(r)) for r in answers]
-        return codes
+        raw_codes = [str(r) for r in answers]
+
+        error_hits = [c for c in raw_codes if c in SPAMHAUS_ERROR_CODES]
+        if error_hits:
+            print(
+                f"[!] Spamhaus query error for {ip}: {error_hits} — likely a "
+                "public/rate-limited DNS resolver, not a real listing; ignoring"
+            )
+
+        real_codes = [c for c in raw_codes if c not in SPAMHAUS_ERROR_CODES]
+        return [SPAMHAUS_CODES.get(c, c) for c in real_codes]
     except dns.resolver.NXDOMAIN:
         return []
     except Exception as e:

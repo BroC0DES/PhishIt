@@ -1,0 +1,22 @@
+From: "GitHub" <notifications@github.com>
+Reply-To: notifications@github.com
+Return-Path: bounce@github.com
+Message-ID: <abc456@github.com>
+Subject: [phishit-sih/pipeline] New comment on your pull request
+Date: Wed, 11 Sep 2024 14:30:00 +0000
+Authentication-Results: mx.google.com;
+    spf=pass smtp.mailfrom=github.com;
+    dkim=pass header.d=github.com;
+    dmarc=pass action=none header.from=github.com
+Received: from github.com (140.82.121.5)
+        by mx.google.com; Wed, 11 Sep 2024 14:30:05 +0000
+Content-Type: text/plain; charset="utf-8"
+
+Hi there,
+
+A teammate left a comment on your pull request. You can view it here:
+
+https://github.com/phishit-sih/pipeline/pull/42#issuecomment-1
+
+Thanks,
+The GitHub Team

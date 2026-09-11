@@ -5,14 +5,12 @@ from urllib.parse import urlparse
 import pandas as pd
 import networkx as nx
 from pyvis.network import Network
- 
-from ip_intelligence import get_ip_info  # Role 3's module
- 
- 
+
+
 # ============================================================
 # Helpers
 # ============================================================
- 
+
 def clean(value):
     """Normalize a field: strip whitespace, lowercase, treat blanks/NaN as None.
     Returns None instead of '' or 'nan' so we never accidentally link
@@ -23,16 +21,22 @@ def clean(value):
     if value == "" or value == "nan":
         return None
     return value
- 
- 
+
+
 _ip_cache = {}
- 
- 
+
+
 def safe_ip_info(ip):
-    """Cached, fault-tolerant wrapper around get_ip_info."""
+    """Cached, fault-tolerant wrapper around get_ip_info.
+
+    Imports ip_intelligence lazily (rather than at module load time) so that
+    correlation's own graph/scoring/clustering logic — which never needs IP
+    intel itself — stays usable even when IPINFO_TOKEN isn't configured.
+    Only this per-IP enrichment step degrades to "unknown" in that case."""
     if ip in _ip_cache:
         return _ip_cache[ip]
     try:
+        from ip_intelligence import get_ip_info  # Role 3's module
         info = get_ip_info(ip)
     except Exception as e:
         info = {"country": "unknown", "city": "unknown", "isp": "unknown", "error": str(e)}
@@ -282,8 +286,8 @@ NODE_STYLE = {
 }
  
  
-def build_visualization(G: nx.Graph, campaigns, output_html="campaign_graph.html"):
-    net = Network(height="750px", width="100%", bgcolor="#ffffff", font_color="black")
+def build_visualization(G: nx.Graph, campaigns, output_html="campaign_graph.html", cdn_resources="local"):
+    net = Network(height="750px", width="100%", bgcolor="#ffffff", font_color="black", cdn_resources=cdn_resources)
  
     node_campaign = {}
     for c in campaigns:

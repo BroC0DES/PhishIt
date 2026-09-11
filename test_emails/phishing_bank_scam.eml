@@ -1,0 +1,27 @@
+From: "SBI Bank Security" <noreply@sbi.com>
+Reply-To: security-alert@paypa1-secure-login.tk
+Return-Path: bounce@paypa1-secure-login.tk
+Message-ID: <abc123@paypa1-secure-login.tk>
+Subject: Urgent: Your account will be suspended immediately
+Date: Mon, 9 Sep 2024 10:00:00 +0000
+Authentication-Results: mx.google.com;
+    spf=fail smtp.mailfrom=paypa1-secure-login.tk;
+    dkim=fail header.d=sbi.com;
+    dmarc=fail action=none header.from=sbi.com
+Received: from unknownrelay.net (185.220.101.45)
+        by paypa1-secure-login.tk; Mon, 9 Sep 2024 09:58:00 +0000
+Received: from paypa1-secure-login.tk (203.0.113.50)
+        by mx.google.com; Mon, 9 Sep 2024 10:00:00 +0000
+Content-Type: text/plain; charset="utf-8"
+
+Dear Customer,
+
+Your account will be suspended immediately unless you verify your account
+now. Click here immediately to confirm your account or it will be deleted:
+
+http://paypa1-secure-login.tk/verify?account=12345
+
+This is your final notice. Unauthorized access to your account has been
+detected and requires urgent action.
+
+SBI Bank Security Team

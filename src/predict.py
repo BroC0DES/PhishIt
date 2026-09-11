@@ -61,9 +61,9 @@ def predict(subject, body):
     }
 
 
-# Test it
-result = predict(
-    subject="Urgent: Your account will be suspended",
-    body="Click here immediately to verify your account or it will be deleted."
-)
-print(result)
+if __name__ == "__main__":
+    result = predict(
+        subject="Urgent: Your account will be suspended",
+        body="Click here immediately to verify your account or it will be deleted."
+    )
+    print(result)
