@@ -1,0 +1,325 @@
+====================================================================
+PhishIt - Domain Intelligence Module
+Feature 4: analyze_domain() - The Combiner (INTEGRATION CONTRACT)
+====================================================================
+File:  domain_intelligence/analyze_domain.py
+Date built: 2026-09-09
+
+
+--------------------------------------------------------------------
+1. WHAT PROBLEM DOES THIS SOLVE?
+--------------------------------------------------------------------
+We now have THREE separate, independently-tested domain checks:
+
+  domain_age.py     -> check_domain_age(domain)   - "how old is it?" (WHOIS)
+  mx_check.py        -> check_mx_records(domain)    - "can it receive mail?" (DNS)
+  lookalike_check.py -> check_lookalike(domain)      - "does the NAME look fake?" (string logic)
+
+Each returns its own dictionary, with its own field names, its own
+"status" wording, and its own idea of what counts as a red flag. That
+is great for testing each check in isolation, but no good for the
+rest of PhishIt (or for teammates on other parts of the project) -
+nobody should have to import three modules and remember three
+different dictionary shapes just to ask "is this domain suspicious?"
+
+analyze_domain.py's job is to be that ONE function: call all three
+checks, merge their results, and hand back a SINGLE dictionary with a
+SINGLE overall verdict. This merged dictionary is the CONTRACT the
+rest of the team integrates against - specifically:
+  - Person 5 (campaign clustering) - needs mx_provider especially,
+    to group phishing domains that share mail infrastructure.
+  - Person 6 (dashboard) - needs verdict + reasons to show a human a
+    clear, explainable "why this was flagged" summary.
+
+
+--------------------------------------------------------------------
+2. THE EXACT OUTPUT SHAPE (the contract itself)
+--------------------------------------------------------------------
+analyze_domain(domain) ALWAYS returns a dictionary in exactly this
+shape - field names and types below are fixed, do not rename them:
+
+    {
+        "name": domain,            # str - the input domain, as given
+
+        "age_days": int or None,   # from domain_age.py
+                                    # None = age could not be determined
+                                    # (WHOIS failed / no data)
+
+        "is_new": True/False/None, # from domain_age.py
+                                    # True  = under 30 days old
+                                    # None  = age unknown, can't judge
+
+        "has_mx": True/False,      # from mx_check.py (always boolean,
+                                    # never None - see section 3)
+
+        "mx_provider": str or None,# RAW MX HOSTNAME, e.g. "aspmx.l.google.com"
+                                    # NOT a friendly category label like
+                                    # "Google Workspace / Gmail", and NOT
+                                    # just a repeat of has_mx as True/False.
+                                    # None if there is no real MX host to
+                                    # report (no MX records, lookup failed,
+                                    # or an explicit Null MX).
+
+        "lookalike_of": str or None, # brand name string (e.g. "paypal")
+                                      # from lookalike_check.py, or None
+                                      # if the domain doesn't resemble any
+                                      # known brand.
+
+        "suspicious_tld": True/False,# from lookalike_check.py - True if
+                                      # the domain's TLD (.ru/.cn/.tk/.top)
+                                      # is on the abuse-prone watch list.
+
+        "verdict": "safe" or "suspicious", # the one overall answer
+
+        "reasons": [str, str, ...], # plain-English reasons, COMBINED
+                                     # from all three underlying checks,
+                                     # always non-empty, always explains
+                                     # both flagged AND clean results.
+    }
+
+This function NEVER raises an exception and NEVER returns a partial
+or differently-shaped dictionary - every key above is always present.
+On any failure (a check crashes, input is bad/None, anything
+unexpected), the missing pieces of information become None (or the
+safe boolean default), never a missing key or a thrown error.
+
+
+--------------------------------------------------------------------
+3. HOW THE THREE CHECKS ARE MERGED (field by field)
+--------------------------------------------------------------------
+age_days / is_new:
+    Taken straight from check_domain_age()'s "age_days" / "is_new".
+    No transformation needed - that module already returns exactly
+    the None-safe types this contract wants.
+
+has_mx:
+    check_mx_records() can actually return has_mx as True, False, OR
+    None (None = the DNS lookup itself failed, e.g. domain doesn't
+    exist or DNS server unreachable - genuinely "we don't know").
+    This contract's has_mx is strictly True/False (see shape above),
+    so None is folded into False. This is a DELIBERATE, CONSERVATIVE
+    choice: "we could not confirm this domain can receive mail" is
+    treated the same as "it can't" when computing the verdict -
+    better to flag an unreachable/broken domain for a closer look
+    than to silently drop the MX signal for it. The distinction is
+    NOT lost, though: when this happens, `reasons` explicitly says
+    "MX status could not be confirmed via DNS ... conservatively
+    treated as 'no confirmed mail server'", so a human reading the
+    reasons still sees the real picture, not just the flattened bool.
+
+mx_provider:
+    Deliberately the RAW MX HOSTNAME (mx_check.py's "mx_hosts" list,
+    first/highest-priority entry - e.g. "aspmx.l.google.com"), NOT
+    mx_check.py's own "provider" field (a friendly category name like
+    "Google Workspace / Gmail"). This was an explicit requirement:
+    campaign clustering needs the literal server string, because
+    attackers reusing the SAME mail infrastructure across many
+    different lookalike domains is a real, useful clustering signal -
+    a friendly category name would blur many different attacker setups
+    (and many different legitimate ones) into one bucket and destroy
+    that signal. An explicit Null MX (RFC 7505, mx_hosts == ["."]) has
+    no real server to report, so it maps to None here, same as a
+    domain with no MX records at all or a failed lookup.
+
+lookalike_of:
+    Taken straight from check_lookalike()'s "lookalike_of" - already
+    either a brand name string or None, no transformation needed.
+
+suspicious_tld:
+    Taken from check_lookalike()'s "suspicious_tld", coerced to a
+    plain True/False (that function can return None on invalid input,
+    e.g. domain=None - here that becomes False, since this contract's
+    suspicious_tld field is strictly boolean per the agreed shape).
+
+reasons:
+    A single combined list. We append, in order: an age explanation
+    (always present - either the age itself, or "could not be
+    determined"), and - if domain_age.py's own fallback kicked in (see
+    NOTES_domain_age.txt sections 8-9) - a line making clear the age is
+    a Wayback Machine lower-bound ESTIMATE rather than exact WHOIS data,
+    so this honesty caveat is never silently dropped by the combiner.
+    Then the MX explanation (mx_check.py already returns a
+    human-readable "reason" string for every case, including its own
+    "ok"/clean case), and then the full reasons list from
+    check_lookalike() (which itself always includes something, even
+    "No lookalike, suspicious-TLD, or excessive-length red flags
+    detected" when everything is clean). Nothing is filtered out - a
+    CLEAN result gets an explanation too, not just flagged ones, so
+    `reasons` doubles as a full audit trail, useful for the dashboard.
+
+
+--------------------------------------------------------------------
+4. VERDICT LOGIC - WHY IT WORKS THE WAY IT DOES
+--------------------------------------------------------------------
+Rule, as agreed with the team:
+
+    verdict = "suspicious" if ANY of these are true, else "safe":
+      - is_new           (domain registered under 30 days ago)
+      - not has_mx        (no confirmed mail server)
+      - lookalike_of set  (domain text resembles a known brand)
+      - TLD/length risky  (suspicious_tld True, OR the domain name
+                            is unusually long - see note below)
+
+IMPORTANT NOTE on "TLD/length": the agreed output SHAPE only has a
+top-level "suspicious_tld" field (no separate "is_long" field - the
+dictionary shape above is fixed). But the agreed VERDICT rule is
+"TLD/length is suspicious" - both conditions, combined. So internally,
+analyze_domain() also checks check_lookalike()'s "is_long" flag and
+folds it into the verdict decision, even though it is not exposed as
+its own top-level key. It is never silently dropped, though - whenever
+is_long is True, check_lookalike() already put a plain-English
+"Domain name is unusually long ..." line in `reasons`, so the actual
+reason a domain got flagged is always visible there, even for the
+cases where it was length rather than TLD.
+
+WHY A SIMPLE "ANY ONE FLAG = SUSPICIOUS" RULE (an OR, not a weighted
+score):
+  - Each of the three underlying checks was already designed, built,
+    and individually tested as a standalone, meaningful red flag (see
+    each check's own NOTES file for its reasoning). There's no need to
+    re-litigate their individual thresholds here - the combiner trusts
+    them and just asks "did ANY of them fire?"
+  - This is a TRIAGE tool, not a final judgement. A false positive
+    here costs a human (or a later, smarter model) a few seconds of
+    double-checking one extra domain. A false negative costs a missed
+    phishing domain entirely. Given that asymmetry, the logic is
+    intentionally biased toward over-flagging rather than under-flagging.
+  - It keeps the contract simple and explainable: `reasons` always
+    tells you exactly which check(s) fired, in plain English - no
+    hidden weights or scores to reverse-engineer.
+
+
+--------------------------------------------------------------------
+5. HOW THIS FUNCTION NEVER CRASHES
+--------------------------------------------------------------------
+Three layers of protection, matching the "never crash" requirement:
+  1. Each of the three underlying checks (check_domain_age,
+     check_mx_records, check_lookalike) already guarantees it never
+     raises - each catches its own network/parsing errors internally
+     and returns an "unknown"-flavoured dict instead.
+  2. analyze_domain() wraps EACH of those three calls in its own
+     try/except anyway, as a second line of defense - if one check's
+     code ever changes in the future and starts raising, that failure
+     is caught right there and replaced with a safe fallback dict, so
+     it can't take the other two checks down with it.
+  3. The entire function body is wrapped in one more try/except. If
+     ANYTHING unexpected still goes wrong, analyze_domain() returns a
+     dictionary in the FULL correct shape, with every field either
+     None or its safe boolean default, verdict "suspicious" (never
+     silently "safe" on a real failure), and a `reasons` entry
+     explaining that an unexpected error occurred.
+
+Net effect: analyze_domain() can be called on ANY input - a normal
+domain, a nonexistent one, None, an empty string, garbage - and it
+will always return a complete, correctly-shaped dictionary. It is
+safe to call in a loop over a large batch of domains without any
+try/except at the call site.
+
+
+--------------------------------------------------------------------
+6. THE SMOKE TEST (what each case proves)
+--------------------------------------------------------------------
+Run with:
+    .venv\\Scripts\\python.exe domain_intelligence\\analyze_domain.py
+
+This hits the REAL network (live WHOIS + live DNS), same as the other
+three modules' own demos.
+
+CASE 1 - "google.com" (well-known, long-established brand)
+  Proves the full "everything clean" path: old domain, valid/known
+  MX, no lookalike, normal TLD -> verdict "safe".
+
+CASE 2 - "this-domain-should-not-exist-98765.com" (does not exist)
+  Proves graceful handling when BOTH network checks fail entirely -
+  age_days/is_new come back None, has_mx False (unknown, treated
+  conservatively) - and the function still returns a complete
+  dictionary, never crashes, verdict "suspicious" (conservative
+  default when nothing can be confirmed).
+
+CASE 3 - "paypa1-secure-login.tk" (synthetic phishing-style domain)
+  Proves the lookalike_check.py signals (typosquat + risky TLD) flow
+  correctly into the combined verdict and reasons. This is a made-up
+  string, not a real/live domain - see the "why no real PhishTank
+  domain" note below.
+
+CASE 4 - "example.com" (real domain, explicit Null MX record)
+  A genuinely interesting real-world edge case: example.com is old
+  and has no lookalike/TLD issues, but publishes an RFC 7505 "Null
+  MX" record (see NOTES_mx_check.txt section 4) - a legitimate,
+  on-purpose "this domain sends no mail" declaration. Under this
+  module's conservative has_mx rule, that still comes out has_mx
+  False -> verdict "suspicious", even though nothing is actually
+  wrong with example.com. This is a KNOWN, documented limitation
+  (see section 7 below), not a bug - it's called out directly in the
+  smoke test output.
+
+WHY NO REAL PHISHTANK DOMAIN IS HARDCODED HERE:
+  Same policy already established in mx_check.py's own NOTES (section
+  4) and domain_age.py's own NOTES (section 5): live phishing domains
+  get taken down unpredictably (this demo would silently start
+  failing or changing over time), and this project deliberately
+  avoids pointing its own code at live malicious infrastructure. Case
+  3 above achieves the same demonstration goal - showing the
+  suspicious/phishing path working end-to-end - using a synthetic
+  domain string built the same way a real typosquat domain is (brand
+  lookalike + risky TLD), without those downsides. If a live
+  PhishTank example is specifically needed later (e.g. for a
+  presentation), run analyze_domain() manually against one at that
+  time rather than hardcoding it here.
+
+
+--------------------------------------------------------------------
+7. LIMITATIONS (good to mention honestly in a pitch)
+--------------------------------------------------------------------
+- The Null MX false-positive (see Case 4 above): a domain that has
+  formally and correctly declared "I don't send/receive email" still
+  gets has_mx False -> counted toward "suspicious" by this module's
+  conservative OR-based verdict rule. This is a known trade-off of
+  keeping the verdict rule simple and biased toward flagging - a more
+  refined version could special-case "no_mail_by_design" (mx_check.py
+  already labels it distinctly) to not count against the verdict on
+  its own. Left as-is for now to match the exact verdict rule agreed
+  with the team; worth revisiting once real usage data is available.
+- Inherits every individual limitation already documented in
+  NOTES_domain_age.txt, NOTES_mx_check.txt, and NOTES_lookalike.txt
+  (e.g. small/static brand and suspicious-TLD lists, 30-day age
+  threshold as a tunable starting point, WHOIS privacy protection
+  hiding creation dates, etc.) - this combiner doesn't fix any of
+  those, it just merges whatever each check reports.
+- The verdict is a simple OR of independent flags, not a weighted or
+  probabilistic score - a domain that trips exactly one weak signal
+  (e.g. only "unusually long domain name") gets the exact same
+  "suspicious" verdict as one that trips all four. `reasons` is what
+  lets a human or downstream system tell the difference; `verdict`
+  alone does not carry that nuance.
+
+
+--------------------------------------------------------------------
+8. HOW TO USE THIS FUNCTION FROM OTHER CODE
+--------------------------------------------------------------------
+    from analyze_domain import analyze_domain
+
+    result = analyze_domain("paypa1-secure-login.tk")
+    print(result)
+    # -> {'name': 'paypa1-secure-login.tk', 'age_days': None, 'is_new': None,
+    #     'has_mx': False, 'mx_provider': None, 'lookalike_of': 'paypal',
+    #     'suspicious_tld': True, 'verdict': 'suspicious',
+    #     'reasons': ['Domain age could not be determined ...', ...]}
+
+For Person 5 (campaign clustering): group results by "mx_provider"
+(the raw hostname string) to find domains sharing mail infrastructure.
+For Person 6 (dashboard): show "verdict" as the headline flag and
+"reasons" as the supporting explanation list underneath it.
+
+
+--------------------------------------------------------------------
+9. WHAT'S NEXT IN THIS MODULE
+--------------------------------------------------------------------
+- Wire analyze_domain() into the rest of the PhishIt pipeline, running
+  it on domains extracted from incoming email/links.
+- Possible refinements: special-case the Null MX limitation (section
+  7), tune the OR-based verdict into a weighted score once real
+  labeled phishing/safe domain data is available, batch/async support
+  for analyzing many domains at once without one-at-a-time network
+  round-trips.
+====================================================================

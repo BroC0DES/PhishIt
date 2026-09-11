@@ -1,0 +1,180 @@
+====================================================================
+PhishIt - Domain Intelligence Module
+Feature 2: MX (Mail Server) Checker
+====================================================================
+File:  domain_intelligence/mx_check.py
+Date built: 2026-09-08
+
+
+--------------------------------------------------------------------
+1. WHAT PROBLEM DOES THIS SOLVE?
+--------------------------------------------------------------------
+When an email arrives claiming to be "from billing@somebank.com", we
+can ask a separate question: "Is somebank.com even SET UP to send or
+receive email at all?" DNS (the internet's address book) publicly
+records this, and we can check it in a fraction of a second, for
+free, with no AI needed - same philosophy as the domain-age check.
+
+
+--------------------------------------------------------------------
+2. WHAT ARE MX RECORDS? (in plain terms)
+--------------------------------------------------------------------
+DNS (DOMAIN NAME SYSTEM) = the internet's phone book. It maps human-
+readable names (google.com) to the technical info computers need
+(IP addresses, mail servers, etc.), stored as different "record
+types" for different purposes.
+
+MX (MAIL EXCHANGE) RECORD = one specific type of DNS record. It says
+"if you want to deliver email to this domain, send it to THIS mail
+server." Without a valid MX record, a domain literally cannot receive
+email - there's no server listed to hand it to.
+
+Each MX record has:
+  - PREFERENCE (a priority number - lower number = tried first;
+    if the top server is down, mail falls back to the next one)
+  - EXCHANGE (the actual mail server's hostname, e.g. smtp.google.com)
+
+Our code uses "dnspython" to send this DNS question automatically and
+read back the real answer, the same way your email provider does
+every time it delivers you a message.
+
+
+--------------------------------------------------------------------
+3. WHY DOES THIS MATTER FOR SPOTTING FAKE SENDERS?
+--------------------------------------------------------------------
+- A domain with NO MX records at all cannot legitimately receive
+  replies to email sent "from" it - a real business would notice and
+  fix this immediately. Its absence is a red flag on a domain that's
+  actively being used to send mail.
+- A domain with a mail setup that doesn't match its claimed identity
+  (e.g. an MX record pointing to a raw IP address instead of a proper
+  mail server hostname - which breaks email standards) suggests a
+  quickly thrown-together, non-professional setup - exactly what a
+  scammer spinning up infrastructure fast would produce.
+- Knowing the MAIL PROVIDER (Google Workspace, Microsoft 365, etc.)
+  is also useful context: an email "from" a small business that's
+  actually routed through a known enterprise-grade provider is a
+  normal, common setup; but this alone proves nothing on its own -
+  it's one more data point.
+
+
+--------------------------------------------------------------------
+4. A REAL DISCOVERY MADE WHILE BUILDING THIS (worth mentioning in Q&A)
+--------------------------------------------------------------------
+While testing live against example.com, the very first version of
+this code got it WRONG - it reported "has_mx: True" with a blank,
+empty mail server hostname. Investigating why (rather than just
+hardcoding around it) turned up something real:
+
+  example.com publishes a "NULL MX" record (defined in RFC 7505) -
+  a single MX entry that is just a dot (".") instead of a hostname.
+  This is a REAL, official DNS feature: it is the domain owner
+  formally declaring "this domain sends and receives NO email,
+  on purpose." It is common on web-only domains and is considered
+  good practice, NOT a red flag by itself.
+
+We fixed the code to detect this specific case and label it clearly
+as "no_mail_by_design" instead of a normal "has MX" or "suspicious"
+result - and added a note that any email claiming to be FROM such a
+domain should be treated as highly suspicious, since the domain's own
+DNS says it never sends mail.
+
+This is a good example of why doing REAL live lookups (instead of
+faking sample data) matters even during development - a hardcoded
+fake test would never have surfaced this edge case.
+
+
+--------------------------------------------------------------------
+5. HOW THE CODE IS STRUCTURED (and why)
+--------------------------------------------------------------------
+Same pattern as domain_age.py, for the same reasons:
+
+  a) fetch_mx_hosts(domain)
+     - The ONLY function that touches the network - calls
+       dns.resolver.resolve(domain, "MX") directly.
+     - Returns:
+         a list of hostnames  -> real MX records found
+         []  (empty list)     -> domain exists, genuinely has no MX
+         None                 -> lookup failed entirely (bad domain,
+                                  DNS timeout, etc.) - never guessed
+
+  b) identify_provider(mx_hosts) / flag_suspicious_mx(mx_hosts)
+     - Pure logic, no network call - just checks the hostnames against
+       known patterns (identify_provider) or for red flags like an
+       IP-literal address (flag_suspicious_mx).
+     - Testable instantly with made-up data (see test_mx_logic_offline.py)
+
+  c) classify_mx(mx_hosts)
+     - Pure logic that turns the raw fetch result into the final
+       verdict dictionary, including the special Null MX case.
+
+  d) check_mx_records(domain)
+     - Main function other PhishIt modules will call. Combines
+       fetch + classify. Always returns a result, never crashes.
+
+
+--------------------------------------------------------------------
+6. THE 3 LIVE TEST CASES (run domain_age... er, mx_check.py)
+--------------------------------------------------------------------
+Run with:
+    .venv\\Scripts\\python.exe domain_intelligence\\mx_check.py
+
+CASE 1 - Domain with valid MX records: "google.com"
+  Live result: provider "Google Workspace / Gmail", status "ok"
+
+CASE 2 - Domain with an explicit Null MX record: "example.com"
+  Live result: has_mx False, status "no_mail_by_design", is_suspicious False
+  (see section 4 above for why this is NOT flagged as suspicious)
+
+CASE 3 - Domain that doesn't exist: "this-domain-should-not-exist-98765.com"
+  Live result: status "unknown" (lookup fails, no guessing, no crash)
+
+A 4th scenario - an MX record pointing at a raw IP address (a real red
+flag) - is tested OFFLINE instead, in test_mx_logic_offline.py, using
+a fabricated example IP from the range reserved for documentation
+(192.0.2.0/24, RFC 5737). We do this instead of pointing the project
+at a real malicious domain, since such setups don't stay online
+reliably and we don't want to reference live malicious infrastructure
+in this project.
+
+
+--------------------------------------------------------------------
+7. HOW TO USE THIS FUNCTION FROM OTHER CODE
+--------------------------------------------------------------------
+    from mx_check import check_mx_records
+
+    result = check_mx_records("some-suspicious-site.com")
+    print(result)
+    # -> {'has_mx': False, 'provider': 'none', 'is_suspicious': True,
+    #     'reason': 'Domain has no MX records...', 'status': 'suspicious',
+    #     'domain': 'some-suspicious-site.com', 'mx_hosts': []}
+
+
+--------------------------------------------------------------------
+8. LIMITATIONS (good to mention honestly in a pitch)
+--------------------------------------------------------------------
+- identify_provider() uses simple substring matching against a short
+  known-providers list - it will say "other / self-hosted" for many
+  legitimate providers it doesn't recognise, and could theoretically
+  be fooled by a hostname that happens to contain a matching substring.
+  Good enough as a heuristic signal, not a certainty.
+- A domain having a normal, well-configured MX record proves nothing
+  by itself - scammers can and do set up entirely valid mail
+  infrastructure. This is ONE signal to combine with domain age
+  (already built) and other checks, not a standalone verdict.
+- DNS lookups can occasionally fail due to network issues rather than
+  the domain being invalid - in that case we correctly report
+  "unknown" rather than guessing, but that does mean a temporary
+  network hiccup could show as "unknown" instead of a real answer.
+
+
+--------------------------------------------------------------------
+9. WHAT'S NEXT IN THIS MODULE
+--------------------------------------------------------------------
+- Combine domain_age.py + mx_check.py results into one overall
+  "domain risk score" that the rest of PhishIt can use alongside
+  email content analysis.
+- Possible future DNS checks: SPF/DKIM/DMARC records (these prove
+  whether a domain has authorized a given mail server to send on its
+  behalf - directly relevant to detecting spoofed senders).
+====================================================================
