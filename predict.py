@@ -3,8 +3,14 @@ import re
 import numpy as np
 from scipy.sparse import hstack, csr_matrix
 
-model = joblib.load("phishing_model.joblib")
-vectorizer = joblib.load("tfidf_vectorizer.joblib")
+#model = joblib.load("phishing_model.joblib")
+#vectorizer = joblib.load("tfidf_vectorizer.joblib")
+# Change this line:
+# model = joblib.load("phishing_model.joblib")
+
+# To this:
+model = joblib.load("models/phishing_model.joblib")
+vectorizer = joblib.load("models/tfidf_vectorizer.joblib")
 
 URGENCY_WORDS = ["urgent", "immediately", "verify now", "act now",
                  "account suspended", "limited time", "click here now",
