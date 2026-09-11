@@ -1,0 +1,311 @@
+====================================================================
+PhishIt - Domain Intelligence Module
+Feature 1: Domain Age Checker
+====================================================================
+File:  domain_intelligence/domain_age.py
+Date built: 2026-09-08
+
+
+--------------------------------------------------------------------
+1. WHAT PROBLEM DOES THIS SOLVE?
+--------------------------------------------------------------------
+When someone gets a phishing email, it usually contains a link to a
+fake website (e.g. "paypa1-secure-login.com" instead of "paypal.com").
+
+One of the strongest, cheapest signals that a website is fake is:
+    "How long has this domain existed?"
+
+Scammers register a new domain, run their scam for a few days or
+weeks, then throw it away before it gets blacklisted. Legitimate
+brands (Google, banks, etc.) have owned their domains for years.
+
+So: "domain age" is a fast, free, no-AI-needed red flag we can check
+before even looking at the email content.
+
+
+--------------------------------------------------------------------
+2. WHAT IS WHOIS? (in plain terms)
+--------------------------------------------------------------------
+WHOIS (pronounced "who is") = a public lookup service, like a phone
+book for domain names. Every domain (like "example.com") has to be
+registered with a company called a REGISTRAR (the business that
+sells/manages domain names, e.g. GoDaddy, Namecheap), and that
+registration record is publicly queryable.
+
+A WHOIS record typically tells you:
+  - Who registered the domain (sometimes hidden for privacy)
+  - Which REGISTRAR (seller) it was registered through
+  - The CREATION DATE (the day the domain was first registered) <-- what we use
+  - The EXPIRATION DATE (when the registration runs out, unless renewed)
+
+Our code uses the Python library "python-whois" to send this lookup
+automatically and read back the creation date, instead of a human
+typing it into a website manually.
+
+
+--------------------------------------------------------------------
+3. WHY IS A "NEW" DOMAIN SUSPICIOUS?
+--------------------------------------------------------------------
+- Registering a domain costs very little money and takes minutes.
+- Scammers need a FRESH, un-blacklisted domain for each new scam
+  wave, because security tools quickly flag and block domains once
+  they're reported.
+- Legitimate businesses almost never need to switch domains, so
+  their domains tend to be old (years, sometimes decades).
+
+Rule we implemented: if a domain is LESS THAN 30 DAYS OLD, we flag
+it as "new (suspicious)". This threshold (30 days) is a simple,
+adjustable number, not a hard scientific law - real phishing
+detection systems combine this signal with several others (domain
+age is one clue, not proof by itself).
+
+
+--------------------------------------------------------------------
+4. HOW THE CODE IS STRUCTURED (and why)
+--------------------------------------------------------------------
+We split the work into TWO functions on purpose:
+
+  a) get_domain_creation_date(domain)
+     - Does the actual network call to WHOIS via python-whois.
+     - Wrapped in a try/except so that if ANYTHING goes wrong
+       (domain doesn't exist, WHOIS server is down, record is
+       incomplete, etc.) it returns None instead of crashing the
+       whole program.
+
+  b) classify_age(creation_date, new_threshold_days=30)
+     - Pure calculation only: no network call.
+     - Takes a date, works out how many days old it is, and decides
+       "new" vs "established" vs "unknown" (if no date at all).
+     - Because it has NO network dependency, we can test it INSTANTLY
+       using a made-up date - useful for demos, since we can't
+       guarantee a real "brand-new" domain will still be new by the
+       time we present!
+
+  c) check_domain_age(domain, new_threshold_days=30)
+     - The main function other PhishIt modules will actually call.
+     - Combines (a) and (b): fetch the date, then classify it.
+     - Always returns a dictionary, never crashes.
+
+TECHNICAL DETAIL - TIMEZONES:
+  Some WHOIS servers return dates with a TIMEZONE attached
+  (TIMEZONE-AWARE = the date says "this is UTC" or similar) and some
+  don't (NAIVE = just a date, no timezone marked). Python refuses to
+  subtract an aware date from a naive one directly (it raises an
+  error). We fix this by stripping the timezone off before comparing,
+  which is accurate enough for a day-level "how old is this" check.
+
+
+--------------------------------------------------------------------
+5. THE 3 TEST CASES (and what each one proves)
+--------------------------------------------------------------------
+Run with:
+    .venv\Scripts\python.exe domain_intelligence\domain_age.py
+
+TEST 1 - Old brand domain: "google.com"
+  Purpose: prove the "established" (safe) path works on a real,
+           long-owned domain.
+  Result:  age_days: 10585, is_new: False, status: "established"
+
+TEST 2 - Simulated brand-new domain (created 5 days ago)
+  Purpose: prove the "new (suspicious)" path works correctly.
+  Note: we SIMULATE this instead of using a real live domain, because
+        a real "new" domain won't stay under 30 days old forever, and
+        we don't want the demo to silently start failing later or to
+        need us pointing at a real (possibly malicious) live phishing
+        domain. We call classify_age() directly with a fake date -
+        this only tests the logic, not the network call, which is
+        already proven working by Test 1 and Test 3.
+  Result:  age_days: 5, is_new: True, status: "new (suspicious)"
+
+TEST 3 - Domain that doesn't exist: "this-domain-should-not-exist-98765.com"
+  Purpose: prove graceful error handling - WHOIS lookup fails, but the
+           program does NOT crash, and instead reports "unknown".
+  Result:  age_days: None, is_new: None, status: "unknown"
+
+
+--------------------------------------------------------------------
+6. HOW TO USE THIS FUNCTION FROM OTHER CODE
+--------------------------------------------------------------------
+    from domain_age import check_domain_age
+
+    result = check_domain_age("some-suspicious-site.com")
+    print(result)
+    # -> {'age_days': 12, 'is_new': True, 'status': 'new (suspicious)',
+    #     'domain': 'some-suspicious-site.com', 'source': 'whois'}
+
+This return value (a DICTIONARY = a labeled bundle of related values,
+like a mini form with named fields) is designed to be easy to plug
+into the rest of the PhishIt pipeline - e.g. a scoring system that
+adds points toward "this email is phishing" whenever is_new is True.
+
+ALWAYS check the "source" field before treating age_days/is_new as
+exact fact - see sections 8-9 below. If source is "wayback_estimate",
+an extra "note" field is also present, spelling out the caveat.
+
+
+--------------------------------------------------------------------
+7. LIMITATIONS (good to mention honestly in a pitch)
+--------------------------------------------------------------------
+- Some domains hide their creation date behind privacy protection
+  services - as of this update, we no longer just give up and say
+  "unknown" in that case; see sections 8-9 below for the Wayback
+  Machine fallback. "unknown" is now reserved for domains where
+  NEITHER WHOIS NOR Wayback have anything to offer.
+- The 30-day threshold is a starting point, not a proven optimal
+  number - it can be tuned with real phishing data later.
+- Domain age alone does not prove something is phishing - a brand
+  new domain could be a legitimate new startup. This is meant to be
+  ONE signal combined with others (e.g. DNS record checks, which is
+  the next planned piece of this module).
+- (Wayback-specific limitations are covered in section 9 below, to
+  keep them next to the feature they apply to.)
+
+
+--------------------------------------------------------------------
+8. THE WAYBACK MACHINE FALLBACK - WHY IT EXISTS
+--------------------------------------------------------------------
+THE PROBLEM: WHOIS increasingly returns NOTHING useful.
+  Since GDPR (EU privacy law, 2018) and the ICANN policies that
+  followed it worldwide, domain registrars are required to REDACT
+  most personal registrant details from public WHOIS lookups by
+  default - and on many registrars, that redaction ALSO hides the
+  creation date, not just the owner's name/email. In practice, this
+  means a growing share of real-world domains - including plenty of
+  genuinely suspicious ones a phishing detector most wants to check -
+  now return record.creation_date as None from get_domain_creation_date().
+  Before this update, that meant an automatic "unknown" - we had
+  ZERO signal on domain age for any privacy-protected domain, which
+  is a real gap in a tool whose #1 signal is "how old is this domain?"
+
+THE FIX: fall back to the Wayback Machine.
+  The Internet Archive's Wayback Machine (web.archive.org) has been
+  crawling and archiving snapshots of public websites since 1996, and
+  offers a free, public API for querying its archive. get_wayback_estimate()
+  asks it one simple question: "what is the EARLIEST snapshot you have
+  of this domain?" If the Wayback Machine archived a copy of the site
+  on, say, 2015-03-01, that is hard proof the domain already existed
+  and was live on the public internet by that date - no privacy
+  settings can redact that, because it's evidence WE independently
+  observed (well, the Archive did), not something the registrar told us.
+
+WHY THIS IS A "LOWER-BOUND ESTIMATE," NOT AN EXACT DATE (very
+important for a forensic tool's honesty):
+  The domain could have been registered well BEFORE its earliest
+  Wayback snapshot - e.g. it may have sat unused for months before
+  going live, or the Wayback crawler simply might not have discovered
+  it immediately. So:
+      TRUE registration date <= earliest Wayback snapshot date
+  which means our computed age_days is always <= the domain's TRUE
+  age. It can UNDER-estimate age, but it can never OVER-estimate it.
+  Practical effect on confidence:
+    - An "established" (is_new False) result from this source is
+      just as trustworthy as a WHOIS one - if Wayback proves the
+      domain is already over 30 days old, it definitely is.
+    - An "is_new: True" result from this source is LESS certain than
+      a WHOIS one - it might mean the domain really is new, OR it
+      might just mean Wayback hasn't crawled it yet even though it's
+      actually older. Either way, this asymmetry is exactly why the
+      result is honestly labeled an ESTIMATE, not fact - see below.
+
+
+--------------------------------------------------------------------
+9. HOW THE WAYBACK API IS QUERIED, AND HOW check_domain_age() COMBINES IT
+--------------------------------------------------------------------
+API USED: the Wayback "availability API"
+  (https://archive.org/wayback/available?url=...&timestamp=19800101),
+  NOT the CDX full-text search API. Both APIs can answer "what's the
+  earliest snapshot," but the availability API is a single, lightweight
+  lookup built exactly for "what's the closest snapshot to date X" -
+  asking for the snapshot closest to a target date of 1980 (before the
+  web existed) means the "closest" match it returns IS the earliest
+  snapshot on record. This stays fast and reliable even for huge,
+  heavily-archived domains, where we found in testing that the raw CDX
+  search API can be slow enough to blow past a 5-second timeout budget.
+
+CODE STRUCTURE (same fetch-vs-classify split as the rest of this file):
+  get_wayback_estimate(domain)
+    - The ONLY function that talks to the Wayback Machine. Kept
+      completely separate from get_domain_creation_date() (the WHOIS
+      call) on purpose - it is called ONLY as a fallback, and the
+      primary WHOIS logic is untouched by its existence.
+    - Same reliability contract as the WHOIS call: 5-second timeout,
+      catches every error (unreachable API, HTTP errors including 429
+      rate-limiting, malformed JSON, bad timestamp format), and always
+      returns either a real datetime or None - never raises.
+    - Reuses classify_age() (the same pure date-math function WHOIS
+      results go through) once it has a date - no duplicated logic.
+
+  check_domain_age(domain, new_threshold_days=30)  [UPDATED]
+    - Tries WHOIS FIRST, always. get_wayback_estimate() is ONLY called
+      if get_domain_creation_date() returned None (WHOIS failed or had
+      no creation date) - never as a first choice, never in parallel.
+    - Tags every result with "source": "whois", "wayback_estimate", or
+      "unknown" (both network sources failed), so downstream code and
+      the dashboard can always tell exactly where an age number came
+      from, and never mistake an estimate for verified WHOIS fact.
+    - When source is "wayback_estimate", an extra "note" field is
+      added, spelling out in plain English that this is a lower-bound
+      estimate and why (see section 8) - so even a downstream consumer
+      that ignores the "source" field still gets the caveat inline.
+
+WHY HONESTY ABOUT "ESTIMATE VS EXACT" MATTERS FOR A FORENSIC TOOL:
+  A tool used to help judge whether a domain is malicious has to be
+  trustworthy about its own confidence, not just its conclusions. If
+  we quietly presented a Wayback estimate as if it were a real WHOIS
+  date, a downstream analyst (or the dashboard) would have no way to
+  know that number could be understating the domain's real age -
+  which matters most exactly in the case where it would make an old,
+  legitimate domain look suspiciously "new." Being explicit about
+  "source" and adding the "note" turns a potential silent inaccuracy
+  into a clearly-labeled, defensible estimate instead - the kind of
+  distinction judges and real security teams specifically look for,
+  and which most quick phishing-detection projects skip entirely by
+  either ignoring privacy-redacted WHOIS data completely or (worse)
+  treating missing data as if it were a confirmed answer.
+
+
+--------------------------------------------------------------------
+10. THE FALLBACK TEST (what it proves)
+--------------------------------------------------------------------
+See test_wayback_fallback.py. It does NOT pick one specific real
+domain that currently happens to have WHOIS privacy protection
+enabled (that setting can change for any domain at any time, silently
+breaking the demonstration later) - instead it FORCES the failure by
+monkeypatching get_domain_creation_date() to return None, the same
+technique this file's own Test 2 (section 5 above) already uses to
+simulate a "brand-new domain" without depending on a real domain
+staying new forever.
+
+CASES 1-3 are fully offline/deterministic (the Wayback call itself is
+also mocked) - they prove the WIRING is correct: WHOIS failing
+triggers the fallback and the result is correctly labeled (Case 1);
+BOTH WHOIS and Wayback failing degrades gracefully to "unknown"
+without crashing (Case 2); and WHOIS succeeding means Wayback is
+never even called (Case 3) - confirming the main WHOIS logic path is
+completely untouched by this feature, as required.
+
+CASE 4 is a best-effort LIVE call to the real Wayback API against
+wikipedia.org (continuously archived since ~2001). It accepts either
+a real, old estimate OR a graceful None as a pass - a third-party API
+can legitimately be slow, rate-limited, or briefly unavailable, and a
+transient failure there should never be mistaken for our own code
+being broken (Cases 1-3 already prove the logic independently of
+whether this specific live call succeeds right now).
+
+
+--------------------------------------------------------------------
+11. WHAT'S NEXT IN THIS MODULE
+--------------------------------------------------------------------
+- Use dnspython (already installed) to check DNS records (MX, A, etc.)
+  for signs of spoofing or suspiciously configured mail servers.
+  [DONE - see mx_check.py]
+- Combine domain age + DNS checks + lookalike checks into one overall
+  "domain risk score" that the rest of PhishIt can use alongside email
+  content analysis. [DONE - see analyze_domain.py]
+- Possible future refinement: if Wayback's earliest snapshot is itself
+  very recent (e.g. under 30 days), consider a THIRD-tier check
+  (certificate transparency logs are another free, redaction-proof
+  source of "this domain existed by date X") before concluding "new" -
+  since Wayback under-crawling is exactly the scenario where a false
+  "is_new: True" is most likely.
+====================================================================
