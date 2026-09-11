@@ -8,7 +8,6 @@ from scipy.sparse import hstack, csr_matrix
 # Change this line:
 # model = joblib.load("phishing_model.joblib")
 
-# To this:
 model = joblib.load("models/phishing_model.joblib")
 vectorizer = joblib.load("models/tfidf_vectorizer.joblib")
 
