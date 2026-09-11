@@ -1,0 +1,269 @@
+====================================================================
+PhishIt - Domain Intelligence Module
+Feature 3: Lookalike / Typosquat + High-Risk Pattern Checker
+====================================================================
+File:  domain_intelligence/lookalike_check.py
+Date built: 2026-09-09
+
+
+--------------------------------------------------------------------
+1. WHAT PROBLEM DOES THIS SOLVE?
+--------------------------------------------------------------------
+domain_age.py asks "how old is this domain?" and mx_check.py asks
+"is this domain's mail setup real?" - both need to go out onto the
+network (WHOIS / DNS) to get an answer.
+
+This file asks a different kind of question, one that needs NO
+network call at all: "does this domain's NAME ITSELF look like it's
+trying to impersonate a trusted brand, or does it match other
+well-known red-flag patterns?"
+
+Two checks live here:
+  a) Lookalike / typosquat detection - does the domain's text closely
+     resemble a well-known brand (paypal, google, amazon, microsoft,
+     sbi, hdfc, icici, netflix, apple) without actually BEING that
+     brand's real domain?
+  b) High-risk pattern heuristics - does the domain use a TLD (top-
+     level domain, the part after the last dot) that's known to be
+     disproportionately abused, or is the domain name unusually long?
+
+Because this is pure string analysis, it's instant, free, and 100%
+reproducible - no live lookup can fail or time out here.
+
+
+--------------------------------------------------------------------
+2. WHAT IS TYPOSQUATTING, IN PLAIN TERMS?
+--------------------------------------------------------------------
+TYPOSQUATTING = registering a domain name that's almost identical to
+a famous brand's real domain, hoping a victim won't notice the tiny
+difference. Two common styles:
+
+  - CHARACTER-SWAP TYPOSQUAT: swap, drop, add, or visually-replace a
+    letter. e.g. "paypa1.com" (digit "1" instead of letter "l"),
+    "gooogle.com" (extra "o"), "micros0ft.com" (digit "0" instead of
+    letter "o"). These rely on the victim skim-reading the URL.
+
+  - COMBOSQUAT: keep the real brand name spelled correctly, but glue
+    extra words onto it. e.g. "secure-paypal-login.tk" or
+    "paypal-account-verify.com". These rely on the victim seeing the
+    familiar brand name and trusting it, without noticing it's not
+    actually paypal.com.
+
+Our code catches BOTH styles using the same underlying tool: string
+similarity.
+
+
+--------------------------------------------------------------------
+3. WHAT IS LEVENSHTEIN DISTANCE? (in plain terms)
+--------------------------------------------------------------------
+LEVENSHTEIN (EDIT) DISTANCE = the minimum number of single-character
+changes (insert one character, delete one character, or swap one
+character for another) needed to turn one word into another.
+
+Worked example:
+    "paypal" -> "paypa1"
+    Change the last letter "l" to the digit "1". That's ONE edit.
+    So levenshtein_distance("paypal", "paypa1") == 1.
+
+    "google" -> "gooogle"
+    Insert one extra "o". That's ONE edit.
+    So levenshtein_distance("google", "gooogle") == 1.
+
+The smaller the distance, the more similar the two words are. We use
+this to ask: "is this domain just 1 or 2 tiny edits away from a real
+brand name?" - which is exactly what a typosquatter is banking on the
+human eye missing.
+
+HOW WE APPLY IT TO A FULL DOMAIN (not just a single word):
+  We split the domain's label (everything before the TLD) into word-
+  like chunks on dots/hyphens/underscores. e.g.
+      "secure-paypal-login.tk" -> label "secure-paypal-login"
+                                -> chunks ["secure", "paypal", "login"]
+  Then we check EACH chunk against each known brand name, not just
+  the domain as one long string. This is what lets us catch
+  "secure-paypal-login.tk" (a combosquat where the chunk "paypal" is
+  an exact, 0-distance match) just as reliably as "paypa1.com" (a
+  single-chunk, 1-distance character swap).
+
+WHY THE BRAND'S OWN REAL DOMAIN IS NOT FLAGGED:
+  "paypal.com" itself has a single chunk, "paypal", which matches the
+  brand "paypal" with distance 0. If we flagged every 0-distance
+  match, PayPal's own website would be flagged as impersonating
+  itself! So: a single-chunk EXACT match to a brand is treated as
+  that brand's own legitimate domain and skipped. An exact match that
+  is only ONE of SEVERAL chunks (as in the combosquat example above)
+  is still flagged, because a real domain isn't just the brand name
+  wedged next to random extra words.
+
+
+--------------------------------------------------------------------
+4. WHY DOES THIS MATTER FOR SPOTTING PHISHING?
+--------------------------------------------------------------------
+- Typosquatting and combosquatting are two of the single most common
+  techniques used in real-world phishing links, precisely because
+  they exploit how people actually read URLs: quickly, and looking
+  for a familiar brand name rather than checking every character.
+- This check needs no network access and no waiting - it can run
+  instantly on a link the moment it's seen, before we even bother
+  doing a WHOIS or DNS lookup on it.
+- It directly returns WHICH brand is being impersonated, which is
+  immediately useful to show a user: "this link looks like it's
+  trying to impersonate PayPal" is a much clearer warning than a
+  generic "this looks suspicious."
+
+
+--------------------------------------------------------------------
+5. HIGH-RISK TLDs AND LONG DOMAINS - WHY THESE ARE RED FLAGS
+--------------------------------------------------------------------
+SUSPICIOUS TLDs (.ru, .cn, .tk, .top):
+  Multiple independent security research reports (e.g. Spamhaus'
+  "World's Most Abused TLDs") have repeatedly found that a small
+  number of top-level domains account for a hugely disproportionate
+  share of spam and phishing domains - largely because they are free
+  or extremely cheap to register with minimal identity verification,
+  making them attractive for disposable, throwaway attack
+  infrastructure. IMPORTANT: this is a STATISTICAL pattern, not proof
+  - plenty of legitimate sites use these TLDs too, especially ones
+  actually based in the relevant country. This is one weak signal to
+  combine with others, never a standalone verdict.
+
+LONG DOMAIN NAMES (over 30 characters):
+  A common trick is to bury a trusted keyword or brand name deep
+  inside a long string of extra words, so that on a small screen
+  (like a phone) the visible/truncated part of the URL looks
+  trustworthy, while the rest is padding designed to push the actual
+  suspicious part off-screen, or simply to make the link look like a
+  long, "official-looking" security or verification path. 30
+  characters is a simple, adjustable threshold - most normal brand
+  domains (paypal.com, google.com, amazon.com) are well under it.
+
+
+--------------------------------------------------------------------
+6. HOW THE CODE IS STRUCTURED (and why)
+--------------------------------------------------------------------
+This module has NO network-calling function at all - every function
+is pure logic, so (unlike domain_age.py / mx_check.py) there's no
+fetch-vs-classify split needed. Building blocks, smallest first:
+
+  a) levenshtein_distance(word_a, word_b)
+     - The core similarity primitive. Classic dynamic-programming
+       edit-distance calculation. No domain-specific knowledge here
+       at all - just generic string comparison.
+
+  b) _split_label_and_tld(domain) / _tokenize_label(label)
+     - Small helpers that turn "secure-paypal-login.tk" into the
+       label "secure-paypal-login", TLD "tk", and chunks
+       ["secure", "paypal", "login"].
+
+  c) _distance_threshold(brand)
+     - Decides how many edits count as "close enough," scaled to the
+       brand's length (short brands like "sbi" need a tighter
+       threshold, or almost anything would match by chance).
+
+  d) find_lookalike_brand(domain, brands=KNOWN_BRANDS)
+     - Combines (a)-(c): checks every chunk of the domain against
+       every known brand, returns the closest match within threshold,
+       or None. This is the heart of the typosquat/combosquat check.
+
+  e) check_suspicious_tld(domain) / check_domain_length(domain)
+     - The two high-risk pattern heuristics. Simple, independent
+       checks - no similarity math involved.
+
+  f) check_lookalike(domain)
+     - Main entry point other PhishIt modules will call. Combines
+       (d), (e), and (e) again into one dictionary, builds the
+       plain-English `reasons` list, and NEVER raises an exception -
+       even on None or non-string input, it returns a graceful
+       {"status": "unknown", ...} result instead of crashing.
+
+
+--------------------------------------------------------------------
+7. THE TEST CASES (and what each one proves)
+--------------------------------------------------------------------
+Run the demo (no internet needed):
+    .venv\\Scripts\\python.exe domain_intelligence\\lookalike_check.py
+
+CASE 1 - "paypa1.com" (digit "1" instead of letter "l")
+  Proves: single-chunk, 1-edit character-swap typosquat is caught.
+  Result: lookalike_of "paypal", lookalike_distance 1, status "suspicious"
+
+CASE 2 - "secure-paypal-login.tk"
+  Proves: combosquat (exact brand name + extra words) is caught, AND
+  the risky ".tk" TLD is flagged at the same time - two independent
+  reasons in one result.
+  Result: lookalike_of "paypal", suspicious_tld True, status "suspicious"
+
+CASE 3 - "paypal.com" (the real brand domain)
+  Proves: we do NOT flag a brand's own legitimate domain as
+  impersonating itself.
+  Result: lookalike_of None, status "ok"
+
+CASE 4 - a long, brand-unrelated domain
+  Proves: the length heuristic fires independently of the lookalike
+  check (no brand resemblance here at all, only length).
+  Result: is_long True, status "suspicious"
+
+CASE 5 - "wikipedia.org" (an ordinary, unrelated real domain)
+  Proves: a normal domain with no red flags returns a clean "ok"
+  result with an explicit, honest "nothing found" reason.
+
+See test_lookalike_logic_offline.py for the same cases as automated
+assertions, plus direct unit tests of levenshtein_distance(),
+find_lookalike_brand(), check_suspicious_tld(), and
+check_domain_length() individually, and two "bad input" cases
+(empty string, None) proving the function never crashes.
+
+
+--------------------------------------------------------------------
+8. HOW TO USE THIS FUNCTION FROM OTHER CODE
+--------------------------------------------------------------------
+    from lookalike_check import check_lookalike
+
+    result = check_lookalike("secure-paypal-login.tk")
+    print(result)
+    # -> {'domain': 'secure-paypal-login.tk', 'lookalike_of': 'paypal',
+    #     'lookalike_distance': 0, 'suspicious_tld': True, 'is_long': False,
+    #     'status': 'suspicious',
+    #     'reasons': ["Domain closely resembles the brand 'paypal' ...",
+    #                 "Domain uses a TLD ('.tk') that is ..."]}
+
+
+--------------------------------------------------------------------
+9. LIMITATIONS (good to mention honestly in a pitch)
+--------------------------------------------------------------------
+- KNOWN_BRANDS is a short, hardcoded list of 9 brands for this demo.
+  A real deployment would need a much larger, regularly-updated brand
+  list (or a different approach entirely, like checking against the
+  Alexa/Tranco top-N domains) to have broad real-world coverage.
+- False positives are possible for legitimately-owned multi-word
+  domains that happen to contain a brand name (e.g. a brand's own
+  official regional or campaign sub-site). We cannot verify true
+  ownership from the domain string alone - this check flags
+  RESEMBLANCE, not proven impersonation. It's one signal, not a
+  verdict, same philosophy as domain_age.py and mx_check.py.
+- The suspicious-TLD list (.ru, .cn, .tk, .top) is a small, static
+  set based on general abuse-report trends, not a live/updated feed -
+  it will miss other abused TLDs and will occasionally flag
+  legitimate sites in those countries/TLDs.
+- TLD parsing here is simple ("everything after the last dot") and
+  doesn't understand compound TLDs like ".co.in" or ".co.uk" - it
+  would treat the TLD of "example.co.in" as just "in". Good enough
+  for this demo's TLD watch-list (none of which are compound), but
+  worth noting as a simplification.
+- The edit-distance thresholds (1 for short brands, 2 for longer
+  ones) are a reasonable starting point, not a scientifically tuned
+  optimum - like the 30-day domain-age threshold and the MX heuristic,
+  it can be refined later using real phishing-domain datasets.
+
+
+--------------------------------------------------------------------
+10. WHAT'S NEXT IN THIS MODULE
+--------------------------------------------------------------------
+- Combine domain_age.py + mx_check.py + lookalike_check.py results
+  into one overall "domain risk score" that the rest of PhishIt can
+  use alongside email content analysis.
+- Possible future additions: a much larger/auto-updated brand list,
+  homoglyph detection (visually-identical Unicode look-alike
+  characters, e.g. Cyrillic "а" instead of Latin "a" - a step up from
+  plain Levenshtein distance), and SPF/DKIM/DMARC record checks.
+====================================================================
