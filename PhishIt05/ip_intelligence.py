@@ -1,8 +1,10 @@
 import os
 import ipinfo
+from dotenv import load_dotenv
 
-# Set this in your shell before running, e.g.:
-#   export IPINFO_TOKEN=your_token_here
+load_dotenv()  # loads .env from the project root (see .env.example)
+
+# Set IPINFO_TOKEN in your .env file (copy .env.example) or your shell.
 # Never hardcode the token in this file if it's going into a shared/git repo.
 ACCESS_TOKEN = os.getenv("IPINFO_TOKEN")
 if not ACCESS_TOKEN:

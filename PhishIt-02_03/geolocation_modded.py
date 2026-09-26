@@ -1,8 +1,11 @@
 import os
 import requests
 import dns.resolver
+from dotenv import load_dotenv
 
-ABUSEIPDB_KEY = os.getenv("ABUSEIPDB_KEY", "")
+load_dotenv()  # loads .env from the project root (see .env.example)
+
+ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY", "")
 
 # Spamhaus ZEN return codes -> human-readable label
 SPAMHAUS_CODES = {
@@ -27,14 +30,14 @@ SPAMHAUS_ERROR_CODES = {"127.255.255.252", "127.255.255.254", "127.255.255.255"}
 def _check_abuseipdb(ip):
     """Query AbuseIPDB for abuse score, TOR flag, and usage type.
     Always returns a dict or None — never a tuple."""
-    if not ABUSEIPDB_KEY:
-        print("[!] ABUSEIPDB_KEY not set — skipping AbuseIPDB check")
+    if not ABUSEIPDB_API_KEY:
+        print("[!] ABUSEIPDB_API_KEY not set — skipping AbuseIPDB check")
         return None
 
     try:
         response = requests.get(
             "https://api.abuseipdb.com/api/v2/check",
-            headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
+            headers={"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"},
             params={"ipAddress": ip, "maxAgeInDays": 90},
             timeout=5,
         )

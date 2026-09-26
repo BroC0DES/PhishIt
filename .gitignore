@@ -7,3 +7,13 @@ tfidf_vectorizer.joblib
 
 __pycache__/
 *.pyc
+# Secrets - never commit real keys (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+
+# Local logs / tool config
+*.log
+.claude/
+.codex/
+.impeccable/
